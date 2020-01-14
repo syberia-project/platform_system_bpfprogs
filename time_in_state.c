@@ -24,8 +24,8 @@ typedef struct {
 DEFINE_BPF_MAP(uid_times_map, PERCPU_HASH, time_key, uint64_t, 10240)
 DEFINE_BPF_MAP(cpu_last_update_map, PERCPU_ARRAY, uint32_t, uint64_t, 1)
 
-/* Assume max of 1024 CPUs */
-DEFINE_BPF_MAP(cpu_freq_map, ARRAY, uint32_t, uint32_t, 1024)
+DEFINE_BPF_MAP(cpu_policy_map, ARRAY, uint32_t, uint32_t, 1024)
+DEFINE_BPF_MAP(policy_freq_map, ARRAY, uint32_t, uint32_t, 1024)
 
 struct switch_args {
     unsigned long long ignore;
@@ -46,18 +46,24 @@ int tp_sched_switch(struct switch_args* args) {
     uint64_t old_last = *last;
     uint64_t time = bpf_ktime_get_ns();
     *last = time;
+
+    if (!args->prev_pid || !old_last) return 0;
+
     uint32_t cpu = bpf_get_smp_processor_id();
-    uint32_t* freq = bpf_cpu_freq_map_lookup_elem(&cpu);
-    if (args->prev_pid && old_last && freq && *freq) {
-        uint32_t uid = bpf_get_current_uid_gid();
-        time_key key = {.uid = uid, .freq = *freq};
-        uint64_t* tot_time = bpf_uid_times_map_lookup_elem(&key);
-        uint64_t delta = time - old_last;
-        if (!tot_time)
-            bpf_uid_times_map_update_elem(&key, &delta, BPF_ANY);
-        else
-            *tot_time += delta;
-    }
+    uint32_t* policyp = bpf_cpu_policy_map_lookup_elem(&cpu);
+    if (!policyp) return 0;
+    uint32_t policy = *policyp;
+    uint32_t* freq = bpf_policy_freq_map_lookup_elem(&policy);
+    if (!freq || !*freq) return 0;
+
+    uint32_t uid = bpf_get_current_uid_gid();
+    time_key key = {.uid = uid, .freq = *freq};
+    uint64_t* tot_time = bpf_uid_times_map_lookup_elem(&key);
+    uint64_t delta = time - old_last;
+    if (!tot_time)
+        bpf_uid_times_map_update_elem(&key, &delta, BPF_ANY);
+    else
+        *tot_time += delta;
     return 0;
 }
 
@@ -71,7 +77,10 @@ SEC("tracepoint/power/cpu_frequency")
 int tp_cpufreq(struct cpufreq_args* args) {
     uint32_t cpu = args->cpu_id;
     unsigned int new = args->state;
-    bpf_cpu_freq_map_update_elem(&cpu, &new, BPF_ANY);
+    uint32_t* policyp = bpf_cpu_policy_map_lookup_elem(&cpu);
+    if (!policyp) return 0;
+    uint32_t policy = *policyp;
+    bpf_policy_freq_map_update_elem(&policy, &new, BPF_ANY);
     return 0;
 }
 
