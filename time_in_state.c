@@ -40,8 +40,6 @@ typedef struct {
 
 DEFINE_BPF_MAP(freq_to_idx_map, HASH, freq_idx_key, uint8_t, 2048)
 
-DEFINE_BPF_MAP(zero_map, ARRAY, uint32_t, time_val, 1)
-
 struct switch_args {
     unsigned long long ignore;
     char prev_comm[16];
@@ -77,9 +75,7 @@ int tp_sched_switch(struct switch_args* args) {
     time_key key = {.uid = uid, .bucket = freq_idx / FREQS_PER_ENTRY};
     time_val* val = bpf_uid_times_map_lookup_elem(&key);
     if (!val) {
-        time_val* zero_valp = bpf_zero_map_lookup_elem(&zero);
-        if (!zero_valp) return 0;
-        time_val zero_val = *zero_valp;
+        time_val zero_val = {.ar = {0}};
         bpf_uid_times_map_update_elem(&key, &zero_val, BPF_NOEXIST);
         val = bpf_uid_times_map_lookup_elem(&key);
     }
