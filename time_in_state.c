@@ -22,15 +22,15 @@ DEFINE_BPF_MAP_GRW(uid_time_in_state_map, PERCPU_HASH, time_key_t, tis_val_t, 10
 DEFINE_BPF_MAP_GRW(uid_concurrent_times_map, PERCPU_HASH, time_key_t, concurrent_val_t, 1024, AID_SYSTEM)
 DEFINE_BPF_MAP_GRW(uid_last_update_map, HASH, uint32_t, uint64_t, 1024, AID_SYSTEM)
 
-DEFINE_BPF_MAP_UGM(cpu_last_update_map, PERCPU_ARRAY, uint32_t, uint64_t, 1, AID_ROOT, AID_SYSTEM, 0620)
+DEFINE_BPF_MAP_GWO(cpu_last_update_map, PERCPU_ARRAY, uint32_t, uint64_t, 1, AID_SYSTEM)
 
-DEFINE_BPF_MAP_UGM(cpu_policy_map, ARRAY, uint32_t, uint32_t, 1024, AID_ROOT, AID_SYSTEM, 0620)
-DEFINE_BPF_MAP_UGM(policy_freq_idx_map, ARRAY, uint32_t, uint8_t, 1024, AID_ROOT, AID_SYSTEM, 0620)
+DEFINE_BPF_MAP_GWO(cpu_policy_map, ARRAY, uint32_t, uint32_t, 1024, AID_SYSTEM)
+DEFINE_BPF_MAP_GWO(policy_freq_idx_map, ARRAY, uint32_t, uint8_t, 1024, AID_SYSTEM)
 
-DEFINE_BPF_MAP_UGM(freq_to_idx_map, HASH, freq_idx_key_t, uint8_t, 2048, AID_ROOT, AID_SYSTEM, 0620)
+DEFINE_BPF_MAP_GWO(freq_to_idx_map, HASH, freq_idx_key_t, uint8_t, 2048, AID_SYSTEM)
 
-DEFINE_BPF_MAP_UGM(nr_active_map, ARRAY, uint32_t, uint32_t, 1, AID_ROOT, AID_SYSTEM, 0620)
-DEFINE_BPF_MAP_UGM(policy_nr_active_map, ARRAY, uint32_t, uint32_t, 1024, AID_ROOT, AID_SYSTEM, 0620)
+DEFINE_BPF_MAP_GWO(nr_active_map, ARRAY, uint32_t, uint32_t, 1, AID_SYSTEM)
+DEFINE_BPF_MAP_GWO(policy_nr_active_map, ARRAY, uint32_t, uint32_t, 1024, AID_SYSTEM)
 
 struct switch_args {
     unsigned long long ignore;
