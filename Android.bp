@@ -21,4 +21,7 @@ bpf {
         "-Wall",
         "-Werror",
     ],
+    include_dirs: [
+        "system/core/libcutils/include",
+    ],
 }
