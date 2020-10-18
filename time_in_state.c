@@ -32,6 +32,11 @@ DEFINE_BPF_MAP_GWO(freq_to_idx_map, HASH, freq_idx_key_t, uint8_t, 2048, AID_SYS
 DEFINE_BPF_MAP_GWO(nr_active_map, ARRAY, uint32_t, uint32_t, 1, AID_SYSTEM)
 DEFINE_BPF_MAP_GWO(policy_nr_active_map, ARRAY, uint32_t, uint32_t, 1024, AID_SYSTEM)
 
+DEFINE_BPF_MAP_GWO(pid_tracked_map, ARRAY, uint32_t, pid_t, 1, AID_SYSTEM)
+DEFINE_BPF_MAP_GWO(pid_task_aggregation_map, HASH, pid_t, uint16_t, 1024, AID_SYSTEM)
+DEFINE_BPF_MAP_GRO(pid_time_in_state_map, PERCPU_HASH, aggregated_task_tis_key_t, tis_val_t, 1024,
+                   AID_SYSTEM)
+
 struct switch_args {
     unsigned long long ignore;
     char prev_comm[16];
@@ -101,6 +106,25 @@ DEFINE_BPF_PROG("tracepoint/sched/sched_switch", AID_ROOT, AID_SYSTEM, tp_sched_
     uint64_t delta = time - old_last;
     if (val) val->ar[freq_idx % FREQS_PER_ENTRY] += delta;
 
+    const int pid = args->prev_pid;
+    const pid_t tgid = bpf_get_current_pid_tgid() >> 32;
+    pid_t* tracked_tgid = bpf_pid_tracked_map_lookup_elem(&zero);
+    if (tracked_tgid && *tracked_tgid == tgid) {
+        // If this process is marked for time-in-state tracking, aggregate the CPU time-in-state
+        // with other threads sharing the same TGID and aggregation key.
+        uint16_t* aggregation_key = bpf_pid_task_aggregation_map_lookup_elem(&pid);
+        aggregated_task_tis_key_t task_key = {
+                .tgid = tgid,
+                .aggregation_key = aggregation_key ? *aggregation_key : 0,
+                .bucket = freq_idx / FREQS_PER_ENTRY};
+        tis_val_t* task_val = bpf_pid_time_in_state_map_lookup_elem(&task_key);
+        if (!task_val) {
+            tis_val_t zero_val = {.ar = {0}};
+            bpf_pid_time_in_state_map_update_elem(&task_key, &zero_val, BPF_NOEXIST);
+            task_val = bpf_pid_time_in_state_map_lookup_elem(&task_key);
+        }
+        if (task_val) task_val->ar[freq_idx % FREQS_PER_ENTRY] += delta;
+    }
     key.bucket = nactive / CPUS_PER_ENTRY;
     concurrent_val_t* ct = bpf_uid_concurrent_times_map_lookup_elem(&key);
     if (!ct) {
@@ -148,6 +172,23 @@ DEFINE_BPF_PROG("tracepoint/power/cpu_frequency", AID_ROOT, AID_SYSTEM, tp_cpufr
     uint8_t idx = *idxp;
     bpf_policy_freq_idx_map_update_elem(&policy, &idx, BPF_ANY);
     return 0;
+}
+
+// The format of the sched/sched_process_free event is described in
+// adb shell cat /d/tracing/events/sched/sched_process_free/format
+struct sched_process_free_args {
+    unsigned long long ignore;
+    char comm[16];
+    pid_t pid;
+    int prio;
+};
+
+DEFINE_BPF_PROG("tracepoint/sched/sched_process_free", AID_ROOT, AID_SYSTEM, tp_sched_process_free)
+(struct sched_process_free_args* args) {
+    const int ALLOW = 1;
+    int pid = args->pid;
+    bpf_pid_task_aggregation_map_delete_elem(&pid);
+    return ALLOW;
 }
 
 LICENSE("GPL");
