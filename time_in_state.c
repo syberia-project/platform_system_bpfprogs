@@ -32,7 +32,8 @@ DEFINE_BPF_MAP_GWO(freq_to_idx_map, HASH, freq_idx_key_t, uint8_t, 2048, AID_SYS
 DEFINE_BPF_MAP_GWO(nr_active_map, ARRAY, uint32_t, uint32_t, 1, AID_SYSTEM)
 DEFINE_BPF_MAP_GWO(policy_nr_active_map, ARRAY, uint32_t, uint32_t, 1024, AID_SYSTEM)
 
-DEFINE_BPF_MAP_GWO(pid_tracked_map, ARRAY, uint32_t, pid_t, 1, AID_SYSTEM)
+DEFINE_BPF_MAP_GWO(pid_tracked_hash_map, HASH, uint32_t, pid_t, MAX_TRACKED_PIDS, AID_SYSTEM)
+DEFINE_BPF_MAP_GWO(pid_tracked_map, ARRAY, uint32_t, tracked_pid_t, MAX_TRACKED_PIDS, AID_SYSTEM)
 DEFINE_BPF_MAP_GWO(pid_task_aggregation_map, HASH, pid_t, uint16_t, 1024, AID_SYSTEM)
 DEFINE_BPF_MAP_GRO(pid_time_in_state_map, PERCPU_HASH, aggregated_task_tis_key_t, tis_val_t, 1024,
                    AID_SYSTEM)
@@ -108,8 +109,27 @@ DEFINE_BPF_PROG("tracepoint/sched/sched_switch", AID_ROOT, AID_SYSTEM, tp_sched_
 
     const int pid = args->prev_pid;
     const pid_t tgid = bpf_get_current_pid_tgid() >> 32;
-    pid_t* tracked_tgid = bpf_pid_tracked_map_lookup_elem(&zero);
-    if (tracked_tgid && *tracked_tgid == tgid) {
+    bool is_tgid_tracked = false;
+
+    // eBPF verifier does not currently allow loops.
+    // Instruct the C compiler to unroll the loop into a series of steps.
+    #pragma unroll
+    for (uint32_t index = 0; index < MAX_TRACKED_PIDS; index++) {
+        const uint32_t key = index;
+        tracked_pid_t* tracked_pid = bpf_pid_tracked_map_lookup_elem(&key);
+        if (!tracked_pid) continue;
+        if (tracked_pid->state == TRACKED_PID_STATE_UNUSED) {
+            // Reached the end of the list
+            break;
+        }
+
+        if (tracked_pid->state == TRACKED_PID_STATE_ACTIVE && tracked_pid->pid == tgid) {
+            is_tgid_tracked = true;
+            break;
+        }
+    }
+
+    if (is_tgid_tracked) {
         // If this process is marked for time-in-state tracking, aggregate the CPU time-in-state
         // with other threads sharing the same TGID and aggregation key.
         uint16_t* aggregation_key = bpf_pid_task_aggregation_map_lookup_elem(&pid);
@@ -186,7 +206,28 @@ struct sched_process_free_args {
 DEFINE_BPF_PROG("tracepoint/sched/sched_process_free", AID_ROOT, AID_SYSTEM, tp_sched_process_free)
 (struct sched_process_free_args* args) {
     const int ALLOW = 1;
+
     int pid = args->pid;
+    bool is_last = true;
+
+    // eBPF verifier does not currently allow loops.
+    // Instruct the C compiler to unroll the loop into a series of steps.
+    #pragma unroll
+    for (uint32_t index = 0; index < MAX_TRACKED_PIDS; index++) {
+        const uint32_t key = MAX_TRACKED_PIDS - index - 1;
+        tracked_pid_t* tracked_pid = bpf_pid_tracked_map_lookup_elem(&key);
+        if (!tracked_pid) continue;
+        if (tracked_pid->pid == pid) {
+            tracked_pid->pid = 0;
+            tracked_pid->state = is_last ? TRACKED_PID_STATE_UNUSED : TRACKED_PID_STATE_EXITED;
+            bpf_pid_tracked_hash_map_delete_elem(&key);
+            break;
+        }
+        if (tracked_pid->state == TRACKED_PID_STATE_ACTIVE) {
+            is_last = false;
+        }
+    }
+
     bpf_pid_task_aggregation_map_delete_elem(&pid);
     return ALLOW;
 }
